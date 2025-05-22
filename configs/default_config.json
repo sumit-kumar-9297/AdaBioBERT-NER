@@ -1,0 +1,17 @@
+{
+    "biobert_model": "dmis-lab/biobert-v1.1",
+    "alpha_init": 0.5,
+    "batch_size": 2,
+    "eval_batch_size": 4,
+    "max_seq_length": 64,
+    "learning_rate": 2e-5,
+    "alpha_lr": 0.01,
+    "classifier_lr": 1e-4,
+    "weight_decay": 1e-4,
+    "num_epochs": 20,
+    "gradient_accumulation_steps": 8,
+    "use_amp": true,
+    "dropout_rate": 0.3,
+    "freeze_bert_layers": 6,
+    "seed": 42
+}
