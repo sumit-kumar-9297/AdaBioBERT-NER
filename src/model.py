@@ -3,6 +3,7 @@
 
 """
 Model definitions for BioBERT NER with Adaptive Token-Sequence Loss
+Fixed Word2Vec integration
 """
 
 import torch
@@ -11,6 +12,7 @@ from transformers import AutoModel
 from TorchCRF import CRF
 
 from loss import AdaptiveWeighter, CombinedLoss
+from word2vec_embedder import Word2VecEmbedder
 
 class CRFModel(nn.Module):
     def __init__(self, config, dropout_rate=0.3, learning_rate=2e-5, weight_decay=1e-4, 
@@ -23,7 +25,7 @@ class CRFModel(nn.Module):
         self.classifier_lr = classifier_lr
         self.id_to_label = config["id_to_label"]
         
-        # Load BioBERT with memory optimization - config only first
+        # Load BioBERT with memory optimization
         self.bert = AutoModel.from_pretrained(
             config["biobert_model"], 
             output_attentions=False, 
@@ -36,9 +38,17 @@ class CRFModel(nn.Module):
         # Dropout layer
         self.dropout = nn.Dropout(config["dropout_rate"] if "dropout_rate" in config else dropout_rate)
         
-        # Word2Vec embedding layer - directly use pre-loaded vectors
-        self.word2vec_embedding = nn.Embedding.from_pretrained(config["word_vectors"], freeze=False)
-        self.embedding_dim = config["embedding_dim"]
+        # **SIMPLIFIED**: Always fine-tune Word2Vec on training data, use zeros for remaining OOV
+        self.word2vec_embedder = Word2VecEmbedder(
+            word2vec_model=config["word2vec_path"],  # Path to pre-trained model
+            tokenizer=config["tokenizer"],
+            training_sentences=config["training_sentences"],
+            finetune_epochs=config.get("word2vec_finetune_epochs", 5),
+            min_count=config.get("word2vec_min_count", 1),
+            max_vocab_size=config.get("max_vocab_size", 50000),
+            cache_dir=config.get("word2vec_cache_dir", "./word2vec_cache")
+        )
+        self.embedding_dim = self.word2vec_embedder.embedding_dim
         
         # Freeze BERT layers if specified
         freeze_layers = config.get("freeze_bert_layers", 0)
@@ -56,7 +66,7 @@ class CRFModel(nn.Module):
                 for param in module.parameters():
                     param.requires_grad = False
         
-        # Classifier layer
+        # Classifier layer - concatenates BERT and Word2Vec embeddings
         self.classifier = nn.Linear(self.bert.config.hidden_size + self.embedding_dim, self.num_labels)
         
         # Combined loss function with adaptive weighting
@@ -67,8 +77,8 @@ class CRFModel(nn.Module):
         bert_outputs = self.bert(input_ids, attention_mask=attention_mask)
         sequence_output = bert_outputs.last_hidden_state  # (batch_size, seq_len, hidden_dim)
 
-        # Get Word2Vec embeddings - use simplified approach for memory efficiency
-        word2vec_embeddings = self.word2vec_embedding(input_ids)  # Direct mapping as fallback
+        # **FIXED**: Get proper Word2Vec embeddings with correct vocabulary mapping
+        word2vec_embeddings = self.word2vec_embedder(input_ids)  # (batch_size, seq_len, word2vec_dim)
         
         # Concatenate BERT embeddings and Word2Vec embeddings
         combined_embeddings = torch.cat([sequence_output, word2vec_embeddings], dim=-1)  
@@ -102,9 +112,9 @@ class CRFModel(nn.Module):
                 'weight_decay': 0.0,
                 'lr': self.learning_rate
             },
-            # Word2Vec embeddings
+            # Word2Vec embeddings - higher learning rate for fine-tuning
             {
-                'params': [p for n, p in param_optimizer if 'word2vec_embedding' in n],
+                'params': [p for n, p in param_optimizer if 'word2vec_embedder' in n],
                 'weight_decay': self.weight_decay,
                 'lr': self.learning_rate * 2
             },
