@@ -22,6 +22,7 @@ biobert-adaptive-ner/
 │   ├── loss.py (adaptive loss implementation)
 │   ├── data_utils.py (data processing)
 │   └── utils.py (utility functions)
+|   └── word2vec_embedder.py
 ├── scripts/
 │   └── run_all_datasets.sh (batch processing script)
 └── configs/
