@@ -3,6 +3,7 @@
 
 """
 Main training script for BioBERT NER with Adaptive Token-Sequence Loss
+Fixed Word2Vec integration
 """
 
 import os
@@ -36,6 +37,14 @@ def parse_args():
     parser.add_argument('--alpha_init', type=float, default=0.5, help='Initial value for alpha in adaptive loss')
     parser.add_argument('--dropout_rate', type=float, default=0.3, help='Dropout rate')
     parser.add_argument('--freeze_bert_layers', type=int, default=6, help='Number of BERT layers to freeze (0 for none)')
+    
+    # Word2Vec fine-tuning parameters (always enabled)
+    parser.add_argument('--word2vec_finetune_epochs', type=int, default=5,
+                        help='Number of epochs to fine-tune Word2Vec on training data')
+    parser.add_argument('--word2vec_min_count', type=int, default=1,
+                        help='Minimum count for new vocabulary in Word2Vec fine-tuning')
+    parser.add_argument('--word2vec_cache_dir', type=str, default='./word2vec_cache',
+                        help='Directory to cache fine-tuned Word2Vec models')
     
     # Training parameters
     parser.add_argument('--batch_size', type=int, default=2, help='Training batch size')
@@ -572,15 +581,18 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
-    # Load word2vec embeddings
-    from gensim.models import KeyedVectors
-    logger.info(f"Loading Word2Vec model from {args.word2vec_path}")
-    word2vec_model = KeyedVectors.load(args.word2vec_path)
-    embedding_dim = word2vec_model.vector_size
-    logger.info(f"Word2Vec embedding dimension: {embedding_dim}")
+    # **SIMPLIFIED**: Load word2vec path only (model will be loaded and fine-tuned automatically)
+    logger.info(f"Word2Vec model path: {args.word2vec_path}")
+    if not os.path.exists(args.word2vec_path):
+        logger.error(f"Word2Vec model not found: {args.word2vec_path}")
+        raise FileNotFoundError(f"Word2Vec model not found: {args.word2vec_path}")
+    logger.info("✓ Word2Vec model path verified")
     
-    # Create embedding vectors tensor
-    word_vectors = torch.FloatTensor(word2vec_model.wv.vectors)
+    # Create tokenizer
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(args.biobert_model, use_fast=True)
+    logger.info(f"BioBERT tokenizer loaded: {args.biobert_model}")
+    logger.info(f"BioBERT vocabulary size: {len(tokenizer.get_vocab())}")
     
     # Set up dataset paths
     dataset_dir = os.path.join(args.data_dir, args.dataset)
@@ -593,7 +605,7 @@ def main():
     labels = get_unique_labels(train_path).union(get_unique_labels(dev_path)).union(get_unique_labels(test_path))
     label_to_id = {label: idx for idx, label in enumerate(sorted(labels))}
     id_to_label = {idx: label for label, idx in label_to_id.items()}
-    logger.info(f"Found {len(label_to_id)} unique labels")
+    logger.info(f"Found {len(label_to_id)} unique labels: {list(label_to_id.keys())}")
     
     # Read datasets
     logger.info("Reading datasets")
@@ -605,10 +617,6 @@ def main():
     logger.info(f"Dev: {len(dev_sentences)} sentences")
     logger.info(f"Test: {len(test_sentences)} sentences")
     
-    # Create tokenizer
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.biobert_model, use_fast=True)
-    
     # Create datasets
     train_dataset = prepare_dataset(train_sentences, train_labels, tokenizer, max_len=args.max_seq_length)
     dev_dataset = prepare_dataset(dev_sentences, dev_labels, tokenizer, max_len=args.max_seq_length)
@@ -619,20 +627,29 @@ def main():
     dev_loader = DataLoader(dev_dataset, batch_size=args.eval_batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=args.eval_batch_size, shuffle=False)
     
-    # Initialize model
-    from model import CRFModel
-    
+    # **SIMPLIFIED**: Initialize model with always-on fine-tuned Word2Vec
     model_config = {
         "num_labels": len(label_to_id),
         "id_to_label": id_to_label,
-        "word_vectors": word_vectors,
-        "embedding_dim": embedding_dim,
+        "word2vec_path": args.word2vec_path,  # Path for fine-tuning
+        "training_sentences": train_sentences,  # Training data for fine-tuning
+        "tokenizer": tokenizer,  # Tokenizer for proper mapping
         "biobert_model": args.biobert_model,
         "dropout_rate": args.dropout_rate,
-        "freeze_bert_layers": args.freeze_bert_layers
+        "freeze_bert_layers": args.freeze_bert_layers,
+        "word2vec_finetune_epochs": args.word2vec_finetune_epochs,
+        "word2vec_min_count": args.word2vec_min_count,
+        "word2vec_cache_dir": args.word2vec_cache_dir,
+        "max_vocab_size": 50000
     }
     
-    logger.info("Initializing model")
+    logger.info("Initializing model with fine-tuned Word2Vec (always enabled)")
+    logger.info(f"Word2Vec fine-tuning configuration:")
+    logger.info(f"  Fine-tuning epochs: {args.word2vec_finetune_epochs}")
+    logger.info(f"  Minimum word count: {args.word2vec_min_count}")
+    logger.info(f"  Training sentences: {len(train_sentences):,}")
+    logger.info(f"  Cache directory: {args.word2vec_cache_dir}")
+    logger.info(f"  OOV handling: Use zeros for remaining OOV tokens")
     model = CRFModel(
         config=model_config,
         learning_rate=args.learning_rate,
@@ -643,8 +660,14 @@ def main():
     )
     model.to(device)
     
+    # Log model details
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Model initialized with {total_params:,} total parameters, {trainable_params:,} trainable")
+    
     # Create optimizer
     optimizer = model.get_optimizer()
+    logger.info(f"Optimizer created with {len(optimizer.param_groups)} parameter groups")
     
     # Train model
     logger.info("Starting training")
@@ -664,6 +687,23 @@ def main():
     logger.info(f"  Test Micro F1: {test_results['micro_f1']:.6f}")
     logger.info(f"  Final Alpha: {final_alpha:.6f}")
     logger.info(f"  Average Alpha: {avg_alpha:.6f}")
+    
+    # Save final model after all training and testing is complete
+    final_model_path = os.path.join(experiment_dir, 'final_model.pt')
+    torch.save({
+        'epoch': args.num_epochs,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'config': vars(args),
+        'label_to_id': label_to_id,
+        'id_to_label': {idx: label for label, idx in label_to_id.items()},
+        'final_alpha': final_alpha,
+        'avg_alpha': avg_alpha,
+        'test_macro_f1': test_results['macro_f1'],
+        'test_micro_f1': test_results['micro_f1'],
+        'training_metrics': metrics
+    }, final_model_path)
+    logger.info(f"Final model saved to {final_model_path}")
     
     logger.info(f"Experiment completed. Results saved to {experiment_dir}")
     
