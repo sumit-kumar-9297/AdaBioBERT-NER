@@ -4,9 +4,9 @@
 #!/bin/bash
 
 # Configuration
-DATA_DIR="/home/tanmay/sumit/data/ner"
-WORD2VEC_PATH="/home/tanmay/sumit/data/pubmed/pubmed_word2vec.model"
-OUTPUT_DIR="../experiments2"
+DATA_DIR="*/data/ner"
+WORD2VEC_PATH="*/word2vec.model"
+OUTPUT_DIR="../experiments"
 
 # Common parameters
 COMMON_PARAMS="--data_dir $DATA_DIR --word2vec_path $WORD2VEC_PATH --output_dir $OUTPUT_DIR"
