@@ -4,8 +4,8 @@
 #!/bin/bash
 
 # Configuration
-DATA_DIR="*/data/ner"
-WORD2VEC_PATH="*/word2vec.model"
+DATA_DIR="path/to/data/ner"
+WORD2VEC_PATH="path/to/word2vec.model"
 OUTPUT_DIR="../experiments"
 
 # Common parameters
